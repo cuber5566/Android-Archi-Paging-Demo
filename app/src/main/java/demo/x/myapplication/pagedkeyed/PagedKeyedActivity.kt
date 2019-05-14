@@ -7,10 +7,14 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.paging.DataSource
 import androidx.paging.PagedList
+import androidx.paging.RxPagedListBuilder
 import demo.x.myapplication.*
+import io.reactivex.BackpressureStrategy
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.schedulers.Schedulers
 import kotlinx.android.synthetic.main.activity_paged_key.*
-import java.util.concurrent.Executors
 
 class PagedKeyedActivity : AppCompatActivity() {
 
@@ -29,7 +33,6 @@ class PagedKeyedActivity : AppCompatActivity() {
         backgroundHandlerThread.start()
         backgroundHandler = Handler(backgroundHandlerThread.looper)
 
-        val dataSource = MyPageKeyedDataSource()
         val config = PagedList.Config.Builder()
             .setPageSize(3) //Page size must be a positive number
             .setInitialLoadSizeHint(4) // 要比PageSize大，預設為 pageSize * 3
@@ -43,26 +46,13 @@ class PagedKeyedActivity : AppCompatActivity() {
                 Toast.makeText(this, "End_[${it.id}]", Toast.LENGTH_LONG).show()
             }
 
-            /* 產生PagedList, 需要在背景執行 */
-            val pagedList = PagedList.Builder<Int, Item>(dataSource, config)
-                .setFetchExecutor(Executors.newSingleThreadExecutor())
-                .setNotifyExecutor(UiExecutor())
-                .setBoundaryCallback(boundaryCallback)
-                .build()
-
-            onPagedListUpdate(pagedList)
-
-            /* 設定PagedListCallback ，監聽 PagedList */
-            val pagedListCallback = PagedListCallback()
-            pagedList.addWeakCallback(null, pagedListCallback)
-            pagedListCallback.onInserted { _, _ ->
-                onPagedListUpdate(pagedList)
-            }
-
-            /* pagedList.loadAround 加載更多資料 */
-            loadAroundButton.setOnClickListener {
-                pagedList.loadAround(pagedList.loadedCount - 1)
-            }
+            RxPagedListBuilder<Int, Item>(MyDataSourceFactory(), config)
+                .buildFlowable(BackpressureStrategy.BUFFER)
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe { pagedList ->
+                    onPagedListUpdate(pagedList)
+                }
         }
     }
 
@@ -74,12 +64,35 @@ class PagedKeyedActivity : AppCompatActivity() {
                 it.toString() + "\n"
             }
         }.toString()
+
+        /* 設定PagedListCallback ，監聽 PagedList */
+        val pagedListCallback = PagedListCallback()
+        pagedList.addWeakCallback(null, pagedListCallback)
+        pagedListCallback.onInserted { _, _ ->
+            onPagedListUpdate(pagedList)
+        }
+
+        /* pagedList.loadAround 加載更多資料 */
+        loadAroundButton.setOnClickListener {
+            pagedList.loadAround(pagedList.loadedCount - 1)
+        }
+
+        removeButton.setOnClickListener {
+            pagedList.dataSource.invalidate()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         backgroundHandlerThread.quit()
         backgroundHandler.removeCallbacksAndMessages(null)
+    }
+
+    class MyDataSourceFactory : DataSource.Factory<Int, Item>() {
+
+        override fun create(): DataSource<Int, Item> {
+            return MyPageKeyedDataSource()
+        }
     }
 
 }
